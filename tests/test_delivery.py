@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("terrashield")
 
 from terrashield.delivery import verify  # noqa: E402
-from terrashield.domain import Alert, Role, Severity  # noqa: E402
+from terrashield.domain import Alert, Aoi, AoiKind, Role, Severity  # noqa: E402
 from terrashield.providers.transport import Response, TransportError  # noqa: E402
 from terrashield.store import Store  # noqa: E402
 
@@ -38,6 +38,9 @@ def env(tmp_path):
     prepare_database(s.db_path)
     org = ensure_admin(s)
     store = Store(s.db_path, org_id=org, actor="test", role=Role.ADMIN)
+    store.put_aoi(Aoi(id="aoi-1", org_id=org, name="Test", kind=AoiKind.GENERIC,
+                      boundary=[(72.98, 20.98), (73.02, 20.98), (73.02, 21.02),
+                                (72.98, 21.02), (72.98, 20.98)]))
     conn = ledger.connect(s.db_path)
     yield s, store, conn
     store.close()
