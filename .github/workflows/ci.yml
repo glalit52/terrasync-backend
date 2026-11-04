@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install ".[dev]"
+      - run: python -m pytest -q
+
+  image:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg WITH_IMAGERY=0 -t terrasync:ci .
+      - name: container starts, bootstraps, and serves the app
+        run: |
+          docker run -d --name ts -p 8787:8787 \
+            -e TERRASYNC_ADMIN_EMAIL=ci@example.com \
+            -e TERRASYNC_ADMIN_PASSWORD=correct-horse-battery-staple \
+            terrasync:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8787/readyz && break; sleep 1
+          done
+          curl -fsS http://127.0.0.1:8787/ | grep -qi "<html"
+          curl -fsS -X POST http://127.0.0.1:8787/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci@example.com","password":"correct-horse-battery-staple"}' \
+            | grep -q token
+          docker logs ts

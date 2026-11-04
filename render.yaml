@@ -1,0 +1,28 @@
+# Render blueprint: one Docker web service with a persistent disk. A Render
+# disk attaches to a single service, so the worker runs inside the API process
+# (TERRASYNC_EMBEDDED_WORKER=1) and the service stays at one instance.
+services:
+  - type: web
+    name: terrasync
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    disk:
+      name: terrasync-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: TERRASYNC_EMBEDDED_WORKER
+        value: "1"
+      - key: TERRASYNC_FORWARDED_ALLOW_IPS
+        value: "*"
+      - key: TERRASYNC_PUBLIC_BASE_URL
+        sync: false
+      - key: TERRASYNC_ADMIN_EMAIL
+        sync: false
+      - key: TERRASYNC_ADMIN_PASSWORD
+        sync: false
+      - key: TERRASYNC_ADMIN_ORG
+        value: TerraSync
+      - key: TERRASHIELD_PROVIDER
+        value: earth-search

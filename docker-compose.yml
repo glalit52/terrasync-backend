@@ -1,0 +1,45 @@
+# Production on one host: Caddy terminates TLS (automatic certificates for
+# TERRASYNC_DOMAIN), the API serves the web application, and the worker runs
+# the monitoring schedule. API and worker share the SQLite volume; the worker
+# lease means scaling `worker` past one replica changes nothing.
+#
+#   cp .env.example .env   # fill it in
+#   docker compose up -d --build
+#
+services:
+  api:
+    build: .
+    command: ["serve"]
+    env_file: .env
+    environment:
+      # Only Caddy can reach this port, on the internal network.
+      TERRASYNC_FORWARDED_ALLOW_IPS: "*"
+    volumes: [data:/data]
+    expose: ["8787"]
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["worker"]
+    env_file: .env
+    volumes: [data:/data]
+    depends_on: [api]
+    restart: unless-stopped
+    healthcheck: {disable: true}
+
+  caddy:
+    image: caddy:2.8
+    ports: ["80:80", "443:443"]
+    environment:
+      TERRASYNC_DOMAIN: ${TERRASYNC_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    restart: unless-stopped
+
+volumes:
+  data:
+  caddy_data:
+  caddy_config:

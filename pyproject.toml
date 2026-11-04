@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "terrasync-backend"
+version = "0.1.0"
+description = "Production service for the TerraShield engine: ASGI API, scheduled monitoring worker, alert delivery and deployment."
+readme = "README.md"
+requires-python = ">=3.11"
+
+# The engine is pinned to an exact commit of glalit52/TerraSync. The API
+# contract, the analysis and the web application all live there; this package
+# is how they are run in production. Bump the pin deliberately -- and keep
+# TERRASHIELD_REF in the Dockerfile in step (tests/test_packaging.py checks).
+dependencies = [
+  "terrashield @ git+https://github.com/glalit52/TerraSync@8338df5593cc0fe0f880c7caca99ba3b6f57bc84",
+  "starlette>=0.37,<2",
+  "uvicorn[standard]>=0.29",
+]
+
+[project.optional-dependencies]
+# Reading real imagery pixels (cloud-optimised GeoTIFF windowed reads).
+# Without it, catalogue search still works; pixel fetches fail loudly and the
+# worker records the failure per area-day.
+imagery = ["rasterio>=1.3"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+terrasync = "terrasync.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
