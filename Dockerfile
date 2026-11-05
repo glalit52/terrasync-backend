@@ -5,7 +5,7 @@
 # match the pin in pyproject.toml (tests/test_packaging.py checks).
 
 ARG PYTHON_VERSION=3.12
-ARG TERRASHIELD_REF=ee108209d2f0c9c5a90ac975577bd0f435fcf7b6
+ARG TERRASHIELD_REF=01e30ec0ea9a2f491423995b487a26bc35ca8be7
 
 FROM python:${PYTHON_VERSION}-slim AS build
 ARG WITH_IMAGERY=1

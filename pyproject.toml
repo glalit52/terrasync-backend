@@ -14,7 +14,7 @@ requires-python = ">=3.11"
 # is how they are run in production. Bump the pin deliberately -- and keep
 # TERRASHIELD_REF in the Dockerfile in step (tests/test_packaging.py checks).
 dependencies = [
-  "terrashield @ git+https://github.com/glalit52/TerraSync@ee108209d2f0c9c5a90ac975577bd0f435fcf7b6",
+  "terrashield @ git+https://github.com/glalit52/TerraSync@01e30ec0ea9a2f491423995b487a26bc35ca8be7",
   "starlette>=0.37,<2",
   "uvicorn[standard]>=0.29",
 ]
