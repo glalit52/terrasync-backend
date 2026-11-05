@@ -43,7 +43,11 @@ jobs:
       - run: terrasync bootstrap
       - run: terrasync seed-demo --sites-only --site "${{ inputs.site || 'IN-BHD-SOLAR' }}"
       - name: one monitoring cycle on real imagery
-        run: terrasync worker --once | tee cycle.json
+        # pipefail: without it the pipe reports tee's status, and a cycle that
+        # skipped days (worker exits 1) shows green.
+        run: |
+          set -o pipefail
+          terrasync worker --once | tee cycle.json
       - name: what each area-day did
         if: always()
         run: |
