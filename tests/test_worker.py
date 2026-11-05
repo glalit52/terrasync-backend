@@ -75,7 +75,8 @@ def test_failing_day_blocks_then_is_skipped(env):
     assert any("catalogue unavailable" in e for e in first["errors"])
     conn = ledger.connect(s.db_path)
     assert ledger.last_settled_day(conn, org, "IN-BHD-SOLAR") is None
-    worker.run_cycle(s, today=date(2026, 3, 22), provider=Down())
+    second = worker.run_cycle(s, today=date(2026, 3, 22), provider=Down())
+    assert any("skipped" in e for e in second["errors"])
     #: Two attempts on the first day -> skipped, and the area moves on.
     assert ledger.last_settled_day(conn, org, "IN-BHD-SOLAR") == date(2026, 3, 19)
     conn.close()

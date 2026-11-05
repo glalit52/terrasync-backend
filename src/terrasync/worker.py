@@ -54,7 +54,7 @@ def days_to_run(conn: sqlite3.Connection, org_id: str, aoi_id: str, today: date,
 
 def monitor_area(conn: sqlite3.Connection, store: Store, provider: Any, aoi: Any,
                  today: date, settings: Settings) -> dict:
-    out = {"aoi_id": aoi.id, "done": 0, "skipped": 0, "error": None, "alerts": 0}
+    out = {"aoi_id": aoi.id, "done": 0, "skipped": 0, "errors": [], "alerts": 0}
     for day in days_to_run(conn, store.org_id, aoi.id, today, settings):
         attempt = ledger.attempts_for(conn, store.org_id, aoi.id, day) + 1
         try:
@@ -68,10 +68,15 @@ def monitor_area(conn: sqlite3.Connection, store: Store, provider: Any, aoi: Any
                 ledger.record_run(conn, store.org_id, aoi.id, day, "skipped",
                                   attempt, 0, detail)
                 out["skipped"] += 1
+                #: Given up on is still a failure. Reporting only retryable
+                #: errors would let a provider that can never read pixels look
+                #: like a clean cycle with no imagery.
+                out["errors"].append(
+                    f"{day} skipped after {attempt} attempt(s): {detail}")
                 continue
             ledger.record_run(conn, store.org_id, aoi.id, day, "error", attempt,
                               0, detail)
-            out["error"] = detail
+            out["errors"].append(f"{day}: {detail}")
             #: Stop this area for the cycle. Running later days now would
             #: assess them against a history with a hole the retry may fill.
             break
@@ -120,9 +125,8 @@ def run_cycle(settings: Settings, *, today: date | None = None,
                                              settings)
                             summary["area_days"] += r["done"]
                             summary["alerts"] += r["alerts"]
-                            if r["error"]:
-                                summary["errors"].append(
-                                    f"{org}/{aoi.id}: {r['error']}")
+                            summary["errors"].extend(
+                                f"{org}/{aoi.id}: {e}" for e in r["errors"])
                     sent = delivery.deliver_for_org(
                         conn, store, settings, transport=transport,
                         **(delivery_kwargs or {}))
