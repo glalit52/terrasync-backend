@@ -1,0 +1,58 @@
+# Real imagery, end to end. Not part of PR CI on purpose: it depends on a
+# third-party catalogue and object store being up, and on what the satellites
+# happened to see this week. Run it by hand after changing the engine pin or
+# the provider, and on a schedule to notice a vendor changing under us.
+name: live-imagery
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: TERRASHIELD_PROVIDER
+        default: earth-search
+      site:
+        description: demo site id to monitor
+        default: IN-BHD-SOLAR
+      days:
+        description: area-days to process
+        default: "5"
+  schedule:
+    - cron: "17 3 * * 1"
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TERRASYNC_DB: ${{ github.workspace }}/live.db
+      TERRASYNC_ADMIN_EMAIL: live@example.com
+      TERRASYNC_ADMIN_PASSWORD: correct-horse-battery-staple
+      TERRASHIELD_PROVIDER: ${{ inputs.provider || 'earth-search' }}
+      TERRASYNC_BACKFILL_DAYS: ${{ inputs.days || '5' }}
+      TERRASYNC_MAX_DAYS_PER_CYCLE: ${{ inputs.days || '5' }}
+      TERRASYNC_SETTLE_DAYS: "2"
+      TERRASYNC_MAX_DAY_ATTEMPTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ".[imagery]"
+      - name: provider configured and reachable
+        run: terrashield providers --check
+      - run: terrasync bootstrap
+      - run: terrasync seed-demo --sites-only --site "${{ inputs.site || 'IN-BHD-SOLAR' }}"
+      - name: one monitoring cycle on real imagery
+        run: terrasync worker --once | tee cycle.json
+      - name: what each area-day did
+        if: always()
+        run: |
+          python - <<'PY'
+          import sqlite3, os
+          c = sqlite3.connect(os.environ["TERRASYNC_DB"])
+          for r in c.execute("SELECT aoi_id, day, status, alerts, detail FROM terrasync_runs ORDER BY day"):
+              print(*r, sep=" | ")
+          print("scenes:", c.execute("SELECT COUNT(*) FROM scenes").fetchone()[0])
+          print("detections:", c.execute("SELECT COUNT(*) FROM detections").fetchone()[0])
+          print("changes:", c.execute("SELECT COUNT(*) FROM change_events").fetchone()[0])
+          PY
