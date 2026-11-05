@@ -52,11 +52,90 @@ def days_to_run(conn: sqlite3.Connection, org_id: str, aoi_id: str, today: date,
     return out
 
 
+def _published_at(provider: Any, scene: Any) -> datetime | None:
+    """When the provider published the scene, from its STAC item, if known.
+
+    Read from the items the provider remembered during search, never by a
+    fresh request: this is bookkeeping and must not cost a call per scene.
+    """
+    items = getattr(provider, "_items", None) or {}
+    props = (items.get(scene.id) or {}).get("properties") or {}
+    for key in ("published", "created"):
+        value = props.get(key)
+        if value:
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+    return None
+
+
+def watch_arrivals(conn: sqlite3.Connection, store: Store, provider: Any, aoi: Any,
+                   today: date, settings: Settings) -> set[date]:
+    """Record newly published scenes; return already-processed days to redo.
+
+    Providers publish hours to days after acquisition, so a day analysed
+    before its imagery appeared would otherwise keep the answer "no
+    acquisition" forever. A new usable scene on a day already processed puts
+    that day back in the queue; the engine rewrites a day's findings in place
+    and suppresses alerts it has already raised, so a re-run adds what is new
+    and repeats nothing.
+    """
+    if settings.recheck_days <= 0:
+        return set()
+    start = today - timedelta(days=settings.recheck_days)
+    scenes = provider.search(aoi, start, today)
+    known = ledger.known_scene_ids(conn, store.org_id, aoi.id)
+    #: The first time an area is watched, everything in the window is "new"
+    #: only because nobody was looking. Record it, re-run nothing. Marked
+    #: after the search succeeds, so a failed first look is not the one used.
+    first_watch = ledger.start_watch(conn, store.org_id, aoi.id)
+    done = ledger.done_days(conn, store.org_id, aoi.id)
+    redo: set[date] = set()
+    for scene in scenes:
+        if scene.id in known:
+            continue
+        ledger.record_scene(conn, store.org_id, aoi.id, scene.id,
+                            scene.constellation.value, scene.usable,
+                            scene.acquired_at, _published_at(provider, scene))
+        if not first_watch and scene.usable and scene.acquired_on in done:
+            log.info("%s %s: %s published after %s was processed; re-running",
+                     store.org_id, aoi.id, scene.id, scene.acquired_on)
+            redo.add(scene.acquired_on)
+    return redo
+
+
+def _note_processed(conn: sqlite3.Connection, store: Store, provider: Any,
+                    aoi: Any, result: Any) -> None:
+    scene_id = getattr(result, "scene_used", "") or ""
+    if not scene_id:
+        return
+    if scene_id not in ledger.known_scene_ids(conn, store.org_id, aoi.id):
+        #: Backfilled days are older than the watch window; record the scene
+        #: so its processing time is still on the record.
+        for s in store.list_scenes(aoi.id, result.when, result.when):
+            if s.id == scene_id:
+                ledger.record_scene(conn, store.org_id, aoi.id, s.id,
+                                    s.constellation.value, s.usable,
+                                    s.acquired_at, _published_at(provider, s))
+    ledger.mark_processed(conn, store.org_id, aoi.id, scene_id)
+
+
 def monitor_area(conn: sqlite3.Connection, store: Store, provider: Any, aoi: Any,
                  today: date, settings: Settings) -> dict:
-    out = {"aoi_id": aoi.id, "done": 0, "skipped": 0, "errors": [], "alerts": 0}
-    for day in days_to_run(conn, store.org_id, aoi.id, today, settings):
-        attempt = ledger.attempts_for(conn, store.org_id, aoi.id, day) + 1
+    out = {"aoi_id": aoi.id, "done": 0, "skipped": 0, "errors": [], "alerts": 0,
+           "rerun": 0}
+    try:
+        redo = watch_arrivals(conn, store, provider, aoi, today, settings)
+    except Exception as e:                                    # noqa: BLE001
+        redo = set()
+        out["errors"].append(f"watching for new scenes: {type(e).__name__}: {e}")
+    days = sorted(set(days_to_run(conn, store.org_id, aoi.id, today, settings))
+                  | redo)[:settings.max_days_per_cycle]
+    for day in days:
+        previous = ledger.run_status(conn, store.org_id, aoi.id, day)
+        attempt = (1 if previous == "done"
+                   else ledger.attempts_for(conn, store.org_id, aoi.id, day) + 1)
         try:
             result = pipeline.run_day(store, provider, aoi, day)
         except Exception as e:                                # noqa: BLE001
@@ -82,7 +161,9 @@ def monitor_area(conn: sqlite3.Connection, store: Store, provider: Any, aoi: Any
             break
         ledger.record_run(conn, store.org_id, aoi.id, day, "done", attempt,
                           result.alerts, "; ".join(result.notes))
+        _note_processed(conn, store, provider, aoi, result)
         out["done"] += 1
+        out["rerun"] += 1 if day in redo else 0
         out["alerts"] += result.alerts
     return out
 
@@ -98,7 +179,7 @@ def run_cycle(settings: Settings, *, today: date | None = None,
         "started_at": ledger.iso(ledger.now()), "today": today.isoformat(),
         "provider": providers.configured_name() if provider is None else
         type(provider).__name__,
-        "organisations": 0, "areas": 0, "area_days": 0, "alerts": 0,
+        "organisations": 0, "areas": 0, "area_days": 0, "reruns": 0, "alerts": 0,
         "errors": [], "delivery": {"delivered": 0, "failed": 0,
                                    "suppressed": 0, "deferred": 0}}
 
@@ -124,6 +205,7 @@ def run_cycle(settings: Settings, *, today: date | None = None,
                             r = monitor_area(conn, store, provider, aoi, today,
                                              settings)
                             summary["area_days"] += r["done"]
+                            summary["reruns"] += r["rerun"]
                             summary["alerts"] += r["alerts"]
                             summary["errors"].extend(
                                 f"{org}/{aoi.id}: {e}" for e in r["errors"])

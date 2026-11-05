@@ -84,13 +84,22 @@ class Settings:
     #: container with a single disk (Render, Fly); wrong when a separate
     #: worker service is deployed, though the lease makes it harmless.
     embedded_worker: bool = False
-    worker_interval_s: int = 6 * 3600
+    #: How often to look for newly published imagery. Satellites pass every
+    #: few days and providers publish hours after acquisition, so an hour
+    #: keeps findings within about an hour of publication at one catalogue
+    #: search per area per cycle. Lower it if that matters more than requests.
+    worker_interval_s: int = 3600
     #: How far back a newly enrolled area is monitored, so it starts with a
     #: baseline rather than a single day.
     backfill_days: int = 14
-    #: Imagery is published hours to days after acquisition. Days younger than
-    #: this are left for a later cycle rather than processed once and missed.
-    settle_days: int = 1
+    #: Days younger than this are left for a later cycle. Zero processes today
+    #: as soon as imagery exists; scenes published later are caught by
+    #: `recheck_days`, so nothing is processed once and missed.
+    settle_days: int = 0
+    #: How far back a newly published scene still triggers reprocessing of
+    #: its day. Providers publish late; a scene that appears after its day
+    #: was analysed would otherwise never be looked at.
+    recheck_days: int = 3
     #: Upper bound on area-days per area per cycle, so one large backfill does
     #: not starve every other area.
     max_days_per_cycle: int = 7
@@ -134,9 +143,10 @@ class Settings:
             service_token=e.get("TERRASHIELD_TOKEN", "") or g("SERVICE_TOKEN") or "",
             service_org=g("SERVICE_ORG") or "",
             embedded_worker=_bool(g("EMBEDDED_WORKER"), False),
-            worker_interval_s=_int(g("WORKER_INTERVAL_S"), 6 * 3600, minimum=60),
+            worker_interval_s=_int(g("WORKER_INTERVAL_S"), 3600, minimum=60),
             backfill_days=_int(g("BACKFILL_DAYS"), 14, minimum=1),
-            settle_days=_int(g("SETTLE_DAYS"), 1, minimum=0),
+            settle_days=_int(g("SETTLE_DAYS"), 0, minimum=0),
+            recheck_days=_int(g("RECHECK_DAYS"), 3, minimum=0),
             max_days_per_cycle=_int(g("MAX_DAYS_PER_CYCLE"), 7, minimum=1),
             max_day_attempts=_int(g("MAX_DAY_ATTEMPTS"), 3, minimum=1),
             webhook_allow_private=_bool(g("WEBHOOK_ALLOW_PRIVATE"), False),

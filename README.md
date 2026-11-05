@@ -37,7 +37,7 @@ server does. So the contract the web app depends on stays the engine's.
 | **500s scrubbed** — traceback logged with a request id, not returned | The engine returns a traceback in 500 bodies. |
 | **Body size limit, request ids, security headers, optional CORS** | Network-facing basics. |
 | **Web app served from a configured path** | The engine finds `webapp/index.html` relative to its source tree, which does not exist in an installed package. The Docker image fetches it from the same pinned commit. |
-| **Scheduled monitoring worker** | Nothing in the engine runs the pipeline on a schedule. The worker advances each area day by day, oldest first (baselines depend on it), retries a failed day, and skips it after `MAX_DAY_ATTEMPTS` so one bad day cannot block an area forever. A lease in the database keeps two workers from double-spending imagery. |
+| **Imagery processed as it is published** | Nothing in the engine runs the pipeline on a schedule. The worker looks for new scenes every `TERRASYNC_WORKER_INTERVAL_S` (an hour by default), analyses today's imagery the day it appears, and re-runs any recent day a scene arrives for late (`TERRASYNC_RECHECK_DAYS`), so late publication never means a missed pass. Days run oldest first, a failed day is retried then skipped, and a lease keeps two workers from double-spending imagery. Alerts go out in the same cycle. |
 | **Per-organisation alert destinations** (`/api/destinations`) | The engine's `Dispatcher` signs and redacts, but nothing configured destinations or decided what had been sent. Each alert reaches each destination once; a new destination does not receive history; a failing endpoint is retried on later cycles and its failures are listed at `/api/deliveries`. |
 | **Email over SMTP** | The engine refuses to fake email without a relay. With `TERRASYNC_SMTP_*` set, mail is sent, carrying the same redacted payload as webhooks. |
 | **SSRF guard on webhooks** | A webhook URL is an instruction to this server to make a request. Targets must be HTTPS and resolve to public addresses, checked at creation *and* before each send. |
@@ -57,7 +57,7 @@ caller's organisation exactly like the engine's routes.
 | `POST /api/destinations/{id}/test` | admin | Sends one test delivery now and reports the outcome |
 | `GET /api/deliveries` | viewer | Delivery log, failures counted |
 | `GET /api/providers` | viewer | Imagery provider status — selected, ready, missing variables. No secrets |
-| `GET /api/worker` | viewer | Last worker heartbeat and this organisation's recent area-days |
+| `GET /api/worker` | viewer | Last heartbeat, recent area-days, and **latency**: per scene and as medians, hours from acquisition to publication, to being seen, and to findings |
 
 Unauthenticated: `GET /healthz` (liveness), `GET /readyz` (database reachable).
 
@@ -128,9 +128,10 @@ matter first:
 | `TERRASYNC_ALLOW_SIGNUP` | `0` | Self-service organisations |
 | `TERRASHIELD_PROVIDER` | engine default (`earth-search`) | Imagery source; vendor keys are `TERRASHIELD_<VENDOR>_*` |
 | `TERRASYNC_EMBEDDED_WORKER` | `0` | Run the worker inside `serve` |
-| `TERRASYNC_WORKER_INTERVAL_S` | `21600` | |
+| `TERRASYNC_WORKER_INTERVAL_S` | `3600` | How often to look for newly published imagery |
 | `TERRASYNC_BACKFILL_DAYS` | `14` | History monitored for a newly enrolled area |
-| `TERRASYNC_SETTLE_DAYS` | `1` | Days left for imagery to be published before processing |
+| `TERRASYNC_SETTLE_DAYS` | `0` | Days to hold back before first processing a day |
+| `TERRASYNC_RECHECK_DAYS` | `3` | How late a scene can be published and still get its day re-analysed |
 | `TERRASYNC_SMTP_HOST` / `_FROM` / … | — | Email delivery |
 | `TERRASYNC_FORWARDED_ALLOW_IPS` | `127.0.0.1` | Proxies whose `X-Forwarded-For` is believed |
 
@@ -155,6 +156,21 @@ terrasync serve --host 127.0.0.1
 Change the commit in `pyproject.toml` **and** `TERRASHIELD_REF` in the
 `Dockerfile`; `tests/test_packaging.py` fails if they differ, because the image
 would otherwise serve one commit's web app against another's API.
+
+## How "real time" this is
+
+Findings exist within about one worker interval of a scene being **published**.
+Two things sit outside the software and set the floor:
+
+- **Revisit.** A satellite sees a place every few days (Sentinel-2 about every
+  5, both satellites combined 2-3; Sentinel-1 6-12). Nothing is known between
+  passes, and an object cannot be tracked from one pass to the next.
+- **Publication.** Free providers publish hours after acquisition, sometimes
+  more than a day. `/api/worker` reports the measured delay for your sites
+  rather than a promise; the `live-imagery` workflow prints it too.
+
+Daily or on-demand coverage is a commercial-imagery question (Planet daily,
+tasked Maxar or Umbra), wired in as providers but not yet verified.
 
 ## Known limits
 
