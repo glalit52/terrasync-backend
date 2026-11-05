@@ -30,7 +30,7 @@ jobs:
       TERRASHIELD_PROVIDER: ${{ inputs.provider || 'earth-search' }}
       TERRASYNC_BACKFILL_DAYS: ${{ inputs.days || '5' }}
       TERRASYNC_MAX_DAYS_PER_CYCLE: ${{ inputs.days || '5' }}
-      TERRASYNC_SETTLE_DAYS: "2"
+      TERRASYNC_SETTLE_DAYS: "0"
       TERRASYNC_MAX_DAY_ATTEMPTS: "1"
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +57,13 @@ jobs:
           for r in c.execute("SELECT aoi_id, day, status, alerts, detail FROM terrasync_runs ORDER BY day"):
               print(*r, sep=" | ")
           print("scenes:", c.execute("SELECT COUNT(*) FROM scenes").fetchone()[0])
+          print("\nlatency, hours from acquisition (published | seen | processed):")
+          for r in c.execute("SELECT scene_id, acquired_at, published_at, first_seen_at, "
+                             "processed_at FROM terrasync_scenes ORDER BY acquired_at"):
+              from datetime import datetime
+              def h(x):
+                  return "-" if not x else f"{(datetime.fromisoformat(x) - datetime.fromisoformat(r[1])).total_seconds() / 3600:7.1f}"
+              print(f"  {r[0][:44]:<44} {h(r[2])} | {h(r[3])} | {h(r[4])}")
           print("detections:", c.execute("SELECT COUNT(*) FROM detections").fetchone()[0])
           print("changes:", c.execute("SELECT COUNT(*) FROM change_events").fetchone()[0])
           PY

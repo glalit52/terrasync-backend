@@ -64,6 +64,34 @@ CREATE TABLE IF NOT EXISTS terrasync_runs (
     PRIMARY KEY (org_id, aoi_id, day)
 );
 
+-- Every scene the worker has seen in a catalogue, and when. The difference
+-- between these timestamps is the latency of the whole system: how long the
+-- provider took to publish, how long until the worker noticed, how long until
+-- the finding existed.
+CREATE TABLE IF NOT EXISTS terrasync_scenes (
+    org_id        TEXT NOT NULL,
+    aoi_id        TEXT NOT NULL,
+    scene_id      TEXT NOT NULL,
+    constellation TEXT NOT NULL DEFAULT '',
+    usable        INTEGER NOT NULL DEFAULT 1,
+    acquired_at   TEXT NOT NULL,
+    published_at  TEXT,
+    first_seen_at TEXT NOT NULL,
+    processed_at  TEXT,
+    PRIMARY KEY (org_id, aoi_id, scene_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tss_seen ON terrasync_scenes(org_id, first_seen_at);
+
+-- When the worker first watched each area for arrivals. Explicit, because
+-- "no scenes recorded yet" also describes an area whose window happened to
+-- be empty, and that area must still have its late scenes re-run.
+CREATE TABLE IF NOT EXISTS terrasync_watch (
+    org_id     TEXT NOT NULL,
+    aoi_id     TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    PRIMARY KEY (org_id, aoi_id)
+);
+
 CREATE TABLE IF NOT EXISTS terrasync_worker (
     id           INTEGER PRIMARY KEY CHECK (id = 1),
     holder       TEXT NOT NULL DEFAULT '',
@@ -309,3 +337,110 @@ def worker_state(conn: sqlite3.Connection) -> dict:
     return {"heartbeat_at": r["heartbeat_at"] or None,
             "lease_until": r["lease_until"] or None,
             "last_cycle": json.loads(r["last_cycle"] or "{}")}
+
+
+# -- scene arrivals and latency ----------------------------------------------
+
+def start_watch(conn: sqlite3.Connection, org_id: str, aoi_id: str) -> bool:
+    """Mark an area as watched. True only the first time."""
+    with conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO terrasync_watch (org_id, aoi_id, started_at) "
+            "VALUES (?,?,?)", (org_id, aoi_id, iso(now())))
+    return cur.rowcount == 1
+
+
+def known_scene_ids(conn: sqlite3.Connection, org_id: str, aoi_id: str) -> set[str]:
+    return {r[0] for r in conn.execute(
+        "SELECT scene_id FROM terrasync_scenes WHERE org_id = ? AND aoi_id = ?",
+        (org_id, aoi_id)).fetchall()}
+
+
+def record_scene(conn: sqlite3.Connection, org_id: str, aoi_id: str, scene_id: str,
+                 constellation: str, usable: bool, acquired_at: datetime,
+                 published_at: datetime | None, at: datetime | None = None) -> bool:
+    """Remember a scene the first time it is seen. True if it was new."""
+    with conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO terrasync_scenes (org_id, aoi_id, scene_id, "
+            "constellation, usable, acquired_at, published_at, first_seen_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (org_id, aoi_id, scene_id, constellation, 1 if usable else 0,
+             iso(acquired_at), iso(published_at) if published_at else None,
+             iso(at or now())))
+    return cur.rowcount == 1
+
+
+def mark_processed(conn: sqlite3.Connection, org_id: str, aoi_id: str,
+                   scene_id: str, at: datetime | None = None) -> None:
+    """The first time a finding existed for this scene."""
+    with conn:
+        conn.execute(
+            "UPDATE terrasync_scenes SET processed_at = ? WHERE org_id = ? AND "
+            "aoi_id = ? AND scene_id = ? AND processed_at IS NULL",
+            (iso(at or now()), org_id, aoi_id, scene_id))
+
+
+def run_status(conn: sqlite3.Connection, org_id: str, aoi_id: str,
+               day: date) -> str | None:
+    r = conn.execute(
+        "SELECT status FROM terrasync_runs WHERE org_id = ? AND aoi_id = ? "
+        "AND day = ?", (org_id, aoi_id, day.isoformat())).fetchone()
+    return r[0] if r else None
+
+
+def done_days(conn: sqlite3.Connection, org_id: str, aoi_id: str) -> set[date]:
+    return {date.fromisoformat(r[0]) for r in conn.execute(
+        "SELECT day FROM terrasync_runs WHERE org_id = ? AND aoi_id = ? "
+        "AND status = 'done'", (org_id, aoi_id)).fetchall()}
+
+
+def _hours(a: str | None, b: str | None) -> float | None:
+    if not a or not b:
+        return None
+    return round((datetime.fromisoformat(b) - datetime.fromisoformat(a))
+                 .total_seconds() / 3600.0, 2)
+
+
+def recent_scenes(conn: sqlite3.Connection, org_id: str, limit: int = 50) -> list[dict]:
+    """Scenes most recently seen, each with its latencies in hours."""
+    rows = conn.execute(
+        "SELECT aoi_id, scene_id, constellation, usable, acquired_at, "
+        "published_at, first_seen_at, processed_at FROM terrasync_scenes "
+        "WHERE org_id = ? ORDER BY first_seen_at DESC, acquired_at DESC LIMIT ?",
+        (org_id, limit)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["usable"] = bool(d["usable"])
+        d["publish_lag_h"] = _hours(d["acquired_at"], d["published_at"])
+        d["seen_lag_h"] = _hours(d["acquired_at"], d["first_seen_at"])
+        d["processed_lag_h"] = _hours(d["acquired_at"], d["processed_at"])
+        out.append(d)
+    return out
+
+
+def latency_summary(conn: sqlite3.Connection, org_id: str,
+                    limit: int = 200) -> dict:
+    """Medians over recently processed scenes, from acquisition, in hours.
+
+    Measured, not configured: this is how stale a finding is when it first
+    exists, which is the number an operator actually needs to know.
+    """
+    rows = [s for s in recent_scenes(conn, org_id, limit) if s["processed_lag_h"] is not None]
+
+    def median(key: str) -> float | None:
+        vals = sorted(v for s in rows if (v := s[key]) is not None)
+        if not vals:
+            return None
+        mid = len(vals) // 2
+        return vals[mid] if len(vals) % 2 else round((vals[mid - 1] + vals[mid]) / 2, 2)
+
+    return {"scenes_processed": len(rows),
+            "median_publish_lag_h": median("publish_lag_h"),
+            "median_seen_lag_h": median("seen_lag_h"),
+            "median_processed_lag_h": median("processed_lag_h"),
+            "note": ("hours from acquisition: until the provider published the "
+                     "scene, until this service saw it, and until its findings "
+                     "existed. Satellites revisit every few days; this is the "
+                     "delay after each pass, not between passes")}

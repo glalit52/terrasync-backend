@@ -196,7 +196,11 @@ def provider_status(store: Store, **_) -> dict:
 
 @route("GET", "/api/worker")
 def worker_status(store: Store, settings: Settings, params: dict, **_) -> dict:
-    """When monitoring last ran, and this organisation's recent area-days.
+    """When monitoring last ran, how fresh its findings are, and recent work.
+
+    `latency` and `scenes` answer "how stale is what I am looking at": hours
+    from acquisition to publication, to this service seeing the scene, and to
+    its findings existing.
 
     The cycle summary itself is not returned: it spans every organisation.
     """
@@ -206,9 +210,14 @@ def worker_status(store: Store, settings: Settings, params: dict, **_) -> dict:
     try:
         state = ledger.worker_state(conn)
         runs = ledger.recent_runs(conn, store.org_id, limit)
+        scenes = ledger.recent_scenes(conn, store.org_id, min(limit, 100))
+        latency = ledger.latency_summary(conn, store.org_id)
     finally:
         conn.close()
     return {"heartbeat_at": state["heartbeat_at"],
             "interval_s": settings.worker_interval_s,
+            "recheck_days": settings.recheck_days,
+            "latency": latency,
+            "scenes": scenes,
             "runs": runs,
             "errors": [r for r in runs if r["status"] in ("error", "skipped")]}
