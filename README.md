@@ -158,10 +158,14 @@ would otherwise serve one commit's web app against another's API.
 
 ## Known limits
 
-- **Real imagery is unproven end to end.** The engine's catalogue search has
-  been tested against recorded vendor responses, not a live endpoint, and its
-  detectors are tuned on modelled imagery. The worker records every failed
-  area-day at `/api/worker`; watch it after the first real cycle.
+- **Real imagery works; its findings are uncalibrated.** Sentinel-2 on
+  `earth-search`, and Sentinel-2, Landsat and Sentinel-1 RTC on
+  `planetary-computer`, run end to end: the `live-imagery` workflow monitored
+  Mundra and Bhadla over ten real days with every day processed. The engine's
+  detection thresholds are still the ones tuned on modelled imagery, so treat
+  real-imagery alert counts as unmeasured until they are scored against
+  labelled scenes. Run `live-imagery` after changing the engine pin or the
+  provider; failed area-days are listed at `/api/worker`.
 - **SSO / MFA** are not built (engine scope). Put the deployment behind an
   identity-aware proxy if you need them now.
 - **DNS rebinding** can, in principle, slip a private address past the webhook
