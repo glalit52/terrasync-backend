@@ -75,7 +75,8 @@ def test_failing_day_blocks_then_is_skipped(env):
     assert any("catalogue unavailable" in e for e in first["errors"])
     conn = ledger.connect(s.db_path)
     assert ledger.last_settled_day(conn, org, "IN-BHD-SOLAR") is None
-    worker.run_cycle(s, today=date(2026, 3, 22), provider=Down())
+    second = worker.run_cycle(s, today=date(2026, 3, 22), provider=Down())
+    assert any("skipped" in e for e in second["errors"])
     #: Two attempts on the first day -> skipped, and the area moves on.
     assert ledger.last_settled_day(conn, org, "IN-BHD-SOLAR") == date(2026, 3, 19)
     conn.close()
@@ -90,3 +91,14 @@ def test_default_rules_are_per_organisation(env):
         assert len(a.list_rules()) == len(b.list_rules()) > 0
         assert ensure_default_rules(a) == 0          # idempotent
         assert {r.id for r in a.list_rules()}.isdisjoint({r.id for r in b.list_rules()})
+
+
+def test_seed_sites_only_enrols_without_monitoring(env):
+    from terrasync.provisioning import seed_demo
+    s, org = env
+    out = seed_demo(s.db_path, org, date(2026, 3, 1), date(2026, 3, 2),
+                    sites_only=True, only=("IN-SSD-DAM",))
+    assert out == [{"aoi_id": "IN-SSD-DAM", "name": out[0]["name"], "enrolled": True}]
+    with Store(s.db_path, org_id=org, actor="t", role=Role.ADMIN) as store:
+        assert [a.id for a in store.list_aois()] == ["IN-SSD-DAM"]
+        assert store.list_alerts() == []

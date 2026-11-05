@@ -76,7 +76,8 @@ def cmd_seed_demo(args) -> int:
         return 2
     org = org_for_email(settings.db_path, email)
     out = seed_demo(settings.db_path, org, date.fromisoformat(args.since),
-                    date.fromisoformat(args.to))
+                    date.fromisoformat(args.to), sites_only=args.sites_only,
+                    only=tuple(args.site))
     print(json.dumps(out, indent=2))
     return 0
 
@@ -102,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--email", default="", help="an account in the target organisation")
     q.add_argument("--from", dest="since", default="2026-03-01")
     q.add_argument("--to", default="2026-04-12")
+    q.add_argument("--sites-only", action="store_true",
+                   help="enrol the sites without the synthetic backfill, so the "
+                        "worker monitors them on the configured provider")
+    q.add_argument("--site", action="append", default=[],
+                   help="only this site id (repeatable)")
     q.set_defaults(fn=cmd_seed_demo)
     return p
 

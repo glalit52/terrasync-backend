@@ -103,13 +103,18 @@ def org_for_email(db_path: str, email: str) -> str:
     return account.org_id
 
 
-def seed_demo(db_path: str, org_id: str, since: date, to: date) -> list[dict]:
+def seed_demo(db_path: str, org_id: str, since: date, to: date,
+              sites_only: bool = False, only: tuple[str, ...] = ()) -> list[dict]:
     """Enrol the engine's four demo sites into an organisation and monitor them.
 
     Always uses the synthetic provider: the demo sites' scripted events exist
     only in the modelled world. The site ids are global, so the demo estate can
     belong to one organisation per database; a site held by another
     organisation is skipped rather than taken.
+
+    `sites_only` enrols the areas without running the synthetic backfill, so
+    the worker monitors these real places on the configured provider. `only`
+    restricts the sites by id.
     """
     provider = providers.resolve("synthetic")
     out = []
@@ -122,6 +127,8 @@ def seed_demo(db_path: str, org_id: str, since: date, to: date) -> list[dict]:
                role=Role.ADMIN) as store:
         ensure_default_rules(store)
         for demo in sites.load_all():
+            if only and demo.aoi.id not in only:
+                continue
             owner = owners.get(demo.aoi.id)
             if owner and owner != org_id:
                 out.append({"aoi_id": demo.aoi.id, "skipped":
@@ -129,6 +136,9 @@ def seed_demo(db_path: str, org_id: str, since: date, to: date) -> list[dict]:
                 continue
             aoi = dataclasses.replace(demo.aoi, org_id=org_id)
             store.put_aoi(aoi)
+            if sites_only:
+                out.append({"aoi_id": aoi.id, "name": aoi.name, "enrolled": True})
+                continue
             results = pipeline.run_range(store, provider, aoi, since, to)
             worked = [r for r in results if r.scene_used]
             out.append({"aoi_id": aoi.id, "name": aoi.name,

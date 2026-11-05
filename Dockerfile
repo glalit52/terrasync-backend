@@ -25,7 +25,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TERRASYNC_DB=/data/terrasync.db \
     TERRASYNC_WEBAPP=/app/webapp/index.html
 COPY --from=build /wheels /wheels
-RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl \
+# --no-deps: the build stage already resolved every dependency into /wheels.
+# Without it pip re-resolves terrasync-backend's `terrashield @ git+...`
+# requirement, refuses the built terrashield wheel as a match for a URL, and
+# tries to clone -- and this stage has no git, by design.
+RUN pip install --no-cache-dir --no-deps --no-index /wheels/*.whl \
+    && pip check \
     && rm -rf /wheels
 # The web application, from the same engine commit as the API it talks to.
 ADD https://raw.githubusercontent.com/glalit52/TerraSync/${TERRASHIELD_REF}/webapp/index.html /app/webapp/index.html
